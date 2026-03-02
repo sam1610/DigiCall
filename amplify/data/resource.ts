@@ -4,48 +4,61 @@ const schema = a.schema({
   ConnectData: a
     .model({
       // 1. Primary Composite Key
-      // For Agents: PK = AGENT#<AgentID>, SK = PROFILE
-      // For Customers: PK = CUSTOMER#<Phone>, SK = CALL#<Timestamp>
-      pk: a.string().required(), // Partition Key
-      sk: a.string().required(), // Sort Key
+      pk: a.string().required(),
+      sk: a.string().required(),
 
       // 2. Multi-Tenancy & Routing Attributes
-      tenantId: a.string().required(), // e.g., CLINIC_BH_01
-      businessPhone: a.string(),      // The dialed clinic number
-      emergencyPhone: a.string(),      // The dialed clinic number
+      tenantId: a.string().required(),
+      businessPhone: a.string(),
+      emergencyPhone: a.string(),
       
       // 3. Agent & Customer Details
       name: a.string(),
-      status: a.string(),             // Available, Offline, On Break
-      skills: a.string().array(),     // e.g., ["English", "Therapy"]
-      queueId: a.string(),            // Current queue position or status
+      status: a.string(),             
+      skills: a.string().array(),     
+      queueId: a.string(),            
       
-      // 4. Interaction Metadata (for Wallboards/Analytics)
+      // 4. Interaction Metadata
       sentimentScore: a.float(),
       summaryText: a.string(),
-      callDuration: a.integer(),      // In seconds
-      callDisposition: a.string(),    // Resolved, Transferred, etc.
-      recordingsS3Path: a.string(),   // Link to S3
+      callDuration: a.integer(),      
+      callDisposition: a.string(),    
+      recordingsS3Path: a.string(),   
       
       createdAt: a.datetime(),
     })
-    .identifier(['pk', 'sk']) // Enforces Single Table Composite Key
+    .identifier(['pk', 'sk'])
     .secondaryIndexes((index) => [
-      // GSI for Multi-Tenant Dashboard: Query all data for one Clinic by Date
-      index('tenantId').sortKeys(['createdAt']),
-      // GSI for Real-Time Metrics: Query by Status (e.g., all 'Online' agents)
-      index('status').sortKeys(['pk']),
+      // Explicitly named to match your Lambda handler.ts logic
+      index('tenantId')
+      .sortKeys(['createdAt'])
+      .name('tenantId-index') ,
+      index('status')
+      .sortKeys(['pk'])
+      .name('status-index')
     ])
     .authorization((allow) => [
-      allow.authenticated('identityPool'), // Lambda access
-      allow.owner(),                       // React Frontend access
+      // 1. Allows your Lex Lambda (via IAM/Identity Pool) to query
+      allow.authenticated('identityPool'), 
+      // 2. Allows your React Frontend (via Cognito) to manage data
+      allow.owner(),
+      // 3. Optional: Allows API Key access if your Lambda uses it (matching your inspiration)
+      allow.publicApiKey().to(['read', 'create', 'update']), 
     ]),
 });
 
 export type Schema = ClientSchema<typeof schema>;
+
 export const data = defineData({
   schema,
   authorizationModes: {
+    // Matches your React frontend authentication
     defaultAuthorizationMode: 'userPool',
+    
+    // FIX: Changed from apiKeyConfig to apiKeyAuthorizationMode
+    apiKeyAuthorizationMode: {
+      description: 'API Key for Lex Fulfillment and External Integrations',
+      expiresInDays: 30 
+    }
   },
 });
