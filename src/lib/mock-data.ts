@@ -153,7 +153,7 @@ function generateSummary(call: Call): CallSummary {
     callId: call.id,
     summaryText: summaries[call.sentimentLabel],
     keyPhrases: call.topics.concat(['customer service', 'resolution', 'account']).slice(0, 5),
-    entities: [call.customerName, call.agentName, 'Amazon Connect'],
+    entities: [call.customerName, call.agentName, 'Nexus Connect'],
     transcript: transcripts[call.sentimentLabel],
   };
 }

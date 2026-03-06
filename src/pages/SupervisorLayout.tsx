@@ -5,7 +5,7 @@ import { SupervisorNav } from '@/components/SupervisorNav';
 export default function SupervisorLayout() {
   return (
     <div className="min-h-screen bg-background">
-      <AppHeader title="Supervisor Dashboard" subtitle="Amazon Connect Insights" />
+      <AppHeader title="Supervisor Dashboard" subtitle="Nexus Insights" />
       <SupervisorNav />
       <Outlet />
     </div>

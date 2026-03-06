@@ -3,22 +3,32 @@ import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
 const schema = a.schema({
   ConnectData: a
     .model({
-      // 1. Primary Composite Key
+      // Patterns: PATIENT#<Phone>, AGENT#<Username>, or TENANT#<Id>
       pk: a.string().required(),
+      // Patterns: METADATA, CHECKUP#<Timestamp>, or SESSION#<ContactId>
       sk: a.string().required(),
 
-      // 2. Multi-Tenancy & Routing Attributes
+      // 2. Identity & Multi-Tenancy
       tenantId: a.string().required(),
-      businessPhone: a.string(),
-      emergencyPhone: a.string(),
-      
-      // 3. Agent & Customer Details
+      role: a.string().required(), // "AGENT", "PATIENT", or "CHECKUP"
       name: a.string(),
       status: a.string(),             
+
+      // 3. Agent-Specific Attributes
       skills: a.string().array(),     
       queueId: a.string(),            
       
-      // 4. Interaction Metadata
+      // 4. Clinical & Patient-Specific Attributes (The "Card" Requirements)
+      // Store blood pressure, temp, etc., as a JSON string for frontend cards
+      vitals: a.json(), 
+      symptoms: a.string(),
+      diagnosis: a.string(),
+      clinicalNotes: a.string(),
+      providerId: a.string(), // Links a checkup to the Agent who performed it
+      
+      // 5. Interaction & Routing Metadata
+      businessPhone: a.string(),
+      emergencyPhone: a.string(),
       sentimentScore: a.float(),
       summaryText: a.string(),
       callDuration: a.integer(),      
@@ -29,20 +39,22 @@ const schema = a.schema({
     })
     .identifier(['pk', 'sk'])
     .secondaryIndexes((index) => [
-      // Explicitly named to match your Lambda handler.ts logic
+      // Index for Supervisor dashboards filtered by Clinic
       index('tenantId')
-      .sortKeys(['createdAt'])
-      .name('tenantId-index') ,
-      index('status')
-      .sortKeys(['pk'])
-      .name('status-index')
+        .sortKeys(['createdAt'])
+        .name('tenantId-index'),
+      // Index for Agent availability or Patient urgency status
+      index('role')
+        .sortKeys(['status'])
+        .name('role-status-index'),
+      // Index to fetch all history for a specific patient across dates
+      index('pk')
+        .sortKeys(['createdAt'])
+        .name('patient-history-index')
     ])
     .authorization((allow) => [
-      // 1. Allows your Lex Lambda (via IAM/Identity Pool) to query
       allow.authenticated('identityPool'), 
-      // 2. Allows your React Frontend (via Cognito) to manage data
       allow.owner(),
-      // 3. Optional: Allows API Key access if your Lambda uses it (matching your inspiration)
       allow.publicApiKey().to(['read', 'create', 'update']), 
     ]),
 });
@@ -52,13 +64,32 @@ export type Schema = ClientSchema<typeof schema>;
 export const data = defineData({
   schema,
   authorizationModes: {
-    // Matches your React frontend authentication
     defaultAuthorizationMode: 'userPool',
-    
-    // FIX: Changed from apiKeyConfig to apiKeyAuthorizationMode
     apiKeyAuthorizationMode: {
       description: 'API Key for Lex Fulfillment and External Integrations',
       expiresInDays: 30 
     }
   },
 });
+
+
+
+// Hierarchical Access Patterns:
+
+// Patient Profile: Set pk: "PATIENT#+973..." and sk: "METADATA".
+
+// Checkup History: Set pk: "PATIENT#+973..." and sk: "CHECKUP#2026-03-05T12:00:00".
+
+// This allows an agent to query all records starting with CHECKUP# for a specific patient to populate the historical cards on their screen.
+
+// Flexible Vitals (JSON):
+
+// The vitals field is now a JSON type. This allows you to store a dynamic set of data (e.g., { "bp": "120/80", "heartRate": 72, "temp": 37.5 }) that directly maps to the fields in your "Checkup Card" UI.
+
+// Role-Status Indexing:
+
+// The new role-status-index allows a Supervisor to quickly see all "AGENT" records with a status of "Available" or all "PATIENT" records with a status of "URGENT_CRISIS."
+
+// Provider Traceability:
+
+// The providerId field allows the system to track which Agent was responsible for which clinical checkup, creating a clear audit trail for the clinic.
