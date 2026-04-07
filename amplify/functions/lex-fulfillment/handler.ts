@@ -1,130 +1,143 @@
-import { LexV2Event, LexV2Result } from 'aws-lambda';
-import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
-import { SNSClient, PublishCommand } from "@aws-sdk/client-sns"; // Fix: Import Command
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 
-const sns = new SNSClient({});
-const ses = new SESClient({});
-const ddbClient = new DynamoDBClient({});
-const docClient = DynamoDBDocumentClient.from(ddbClient);
+// Initialize DynamoDB Client
+const client = new DynamoDBClient({});
+const docClient = DynamoDBDocumentClient.from(client);
+const TABLE_NAME = process.env.CONNECT_DATA_TABLE_NAME;
 
-export const handler = async (event: LexV2Event): Promise<LexV2Result> => {
-  const intentName = event.sessionState.intent.name;
-  const slots = event.sessionState.intent.slots;
-  const tenantId = event.requestAttributes?.TenantID || "DEFAULT_TENANT";
-  const contactId = event.sessionId;
+export const handler = async (event: any) => {
+    console.log("Received event:", JSON.stringify(event, null, 2));
 
-  // --- 1. CRISIS INTAKE & ALERT ---
-  if (intentName === 'CrisisEscalation') {
-    const symptoms = slots.Symptoms?.value?.interpretedValue || "Not provided";
-    const clinicData = await getClinicProfile(tenantId);
-    const doctorMobile = clinicData?.emergencyPhone;
+// =====================================================================
+    // MODE 1: AMAZON CONNECT (Direct Invoke for the Agent Card)
+    // =====================================================================
+    if (event.Details && event.Details.Parameters) {
+        console.log("Handling request from Amazon Connect...");
+        const phoneNumber = event.Details.Parameters.phoneNumber;
+        
+        // NEW: Check if the calling flow specifically requested JSON format
+        const returnJson = event.Details.Parameters.returnJson === "true";
 
-    if (doctorMobile) {
-      // Fix: Use .send(new PublishCommand) for SDK v3
-      await sns.send(new PublishCommand({
-        PhoneNumber: doctorMobile,
-        Message: `🚨 CRISIS ALERT (${tenantId}): Patient ${contactId}. Intake: ${symptoms}`
-      }));
+        if (!phoneNumber) {
+            return { PatientName: "Unknown", ClinicalNotes: "No phone number provided." };
+        }
+
+        try {
+            const dynamoResponse = await docClient.send(new GetCommand({
+                TableName: TABLE_NAME,
+                Key: { pk: `PATIENT#${phoneNumber}`, sk: 'METADATA' }
+            }));
+
+            let pastRecordsArray: { date: string, symptoms: string }[] = [];
+            
+            const historyRes = await docClient.send(new QueryCommand({
+                TableName: TABLE_NAME,
+                KeyConditionExpression: "pk = :pk AND begins_with(sk, :sk)",
+                ExpressionAttributeValues: { ":pk": `PATIENT#${phoneNumber}`, ":sk": "CHECKUP#" },
+                ScanIndexForward: false, // Gets newest records first
+                Limit: 5
+            }));
+
+            if (historyRes.Items && historyRes.Items.length > 0) {
+                pastRecordsArray = historyRes.Items.map(item => ({
+                    date: item.createdAt.split('T')[0],
+                    symptoms: item.symptoms || "No symptoms logged"
+                }));
+            }
+
+            if (dynamoResponse.Item) {
+                return {
+                    PatientName: dynamoResponse.Item.name || "Unknown",
+                    ClinicalNotes: dynamoResponse.Item.clinicalNotes || "No notes on file.",
+                    CustomerPhoneNumber: phoneNumber,
+                    // SMART ROUTING: Give an Array to the Screenpop View, but give a String to the Inbound flow!
+                    PreviousRecords: returnJson ? pastRecordsArray : JSON.stringify(pastRecordsArray)
+                };
+            } else {
+                return { PatientName: "Not Found", ClinicalNotes: "No record found for this number." };
+            }
+        } catch (error) {
+            console.error("DynamoDB Error during Connect lookup:", error);
+            return { PatientName: "Error", ClinicalNotes: "Database lookup failed." };
+        }
     }
 
-    await docClient.send(new PutCommand({
-      TableName: process.env.CONNECT_DATA_TABLE_NAME,
-      Item: { pk: `CUSTOMER#${contactId}`, sk: `CRISIS#${Date.now()}`, tenantId, status: "URGENT", summaryText: symptoms, createdAt: new Date().toISOString() }
-    }));
+    // =====================================================================
+    // MODE 2: AMAZON BEDROCK AGENT (Action Group)
+    // =====================================================================
+    const apiPath = event.apiPath;
+    let responseBody = {};
+    const sessionAttributes: Record<string, string> = event.sessionAttributes || {};
 
-    return buildResponse(intentName, "I've alerted our medical team. Please stay on the line.");
-  }
+    try {
+        // --- ROUTE 1: GET PATIENT PROFILE ---
+        if (apiPath === '/patient-profile' && event.httpMethod === 'POST') {
+            const properties = event.requestBody?.content['application/json']?.properties || [];
+            const phoneNumber = properties.find((p: any) => p.name === 'phoneNumber')?.value;
 
-  // --- 2. DYNAMIC APPOINTMENT BOOKING ---
-  if (intentName === 'BookAppointment') {
-    if (!slots.ProviderName?.value) {
-      const doctors = await getDoctorsForClinic(tenantId);
-      const buttons = doctors.map(doc => ({ text: doc.name, value: doc.name }));
+            if (!phoneNumber) throw new Error("Missing phoneNumber parameter.");
+            console.log(`[Bedrock] Looking up patient: ${phoneNumber}`);
 
-      return {
-        sessionState: {
-          dialogAction: { type: 'ElicitSlot', slotToElicit: 'ProviderName' },
-          intent: { 
-            name: intentName, 
-            slots: slots,
-            state: 'InProgress' // Fix: Required state field
-          }
+            const dynamoResponse = await docClient.send(new GetCommand({
+                TableName: TABLE_NAME,
+                Key: { pk: `PATIENT#${phoneNumber}`, sk: 'METADATA' }
+            }));
+
+            if (dynamoResponse.Item) {
+                responseBody = { 
+                    status: "success", 
+                    patientFound: true,
+                    name: dynamoResponse.Item.name,
+                    role: dynamoResponse.Item.role,
+                    clinicalNotes: dynamoResponse.Item.clinicalNotes || "No notes on file."
+                };
+            } else {
+                responseBody = { status: "success", patientFound: false, message: "No patient found." };
+            }
+
+        // --- ROUTE 2: RECORD CHECKUP ---
+        } else if (apiPath === '/checkup' && event.httpMethod === 'POST') {
+            const properties = event.requestBody?.content['application/json']?.properties || [];
+            const symptoms = properties.find((p: any) => p.name === 'symptoms')?.value;
+
+            // DO NOT write to DynamoDB here!
+            // Just save it to Session Attributes so the Connect Flow can hand it to the View
+            sessionAttributes['PatientSymptoms'] = symptoms;
+
+            responseBody = { status: "success", message: "Draft symptoms prepared for nurse validation." };
+
+        // --- ROUTE 3: ROUTE CALL ---
+        } else if (apiPath === '/route-call' && event.httpMethod === 'POST') {
+            const properties = event.requestBody?.content['application/json']?.properties || [];
+            const targetQueue = properties.find((p: any) => p.name === 'targetQueue')?.value;
+
+            if (!targetQueue) throw new Error("Missing targetQueue parameter");
+
+            responseBody = { status: "success", message: `Transfer initiated to ${targetQueue}.` };
+            sessionAttributes['TargetQueue'] = targetQueue;
+            sessionAttributes['x-amz-lex:bedrock-agent:end-session'] = "true";
+
+        } else {
+            throw new Error(`Unknown API path or method: ${event.httpMethod} ${apiPath}`);
+        }
+
+    } catch (error: any) {
+        console.error("Error executing action:", error);
+        responseBody = { status: "error", message: error.message || "Unknown error" };
+    }
+
+    return {
+        messageVersion: "1.0",
+        response: {
+            actionGroup: event.actionGroup,
+            apiPath: event.apiPath,
+            httpMethod: event.httpMethod,
+            httpStatusCode: 200,
+            responseBody: {
+                "application/json": { body: JSON.stringify(responseBody) }
+            }
         },
-        messages: [
-          { contentType: 'PlainText', content: "Which doctor would you like to see?" },
-          {
-            contentType: 'ImageResponseCard',
-            // Fix: Removed 'content' as it's not a valid property here
-            imageResponseCard: { title: 'Select a Provider', buttons: buttons.slice(0, 5) }
-          }
-        ]
-      };
-    }
-    return buildResponse(intentName, "Appointment confirmed!");
-  }
-
-  // --- 4. MEDICATION REFILL ---
-  if (intentName === 'MedicationRefill') {
-    const medName = slots.MedicationName?.value?.interpretedValue;
-    
-    await docClient.send(new PutCommand({
-      TableName: process.env.CONNECT_DATA_TABLE_NAME,
-      Item: {
-        pk: `CUSTOMER#${contactId}`,
-        sk: `REFILL#${Date.now()}`,
-        tenantId: tenantId,
-        status: "PENDING",
-        summaryText: `Refill: ${medName}`,
-        createdAt: new Date().toISOString(),
-      }
-    }));
-
-    await ses.send(new SendEmailCommand({
-      Destination: { ToAddresses: ["clinic-staff@example.com"] },
-      Message: {
-        Body: { Text: { Data: `Refill Request: ${medName}\nClinic: ${tenantId}` } },
-        Subject: { Data: "Medication Refill Alert" }
-      },
-      Source: "automation@yourdomain.com"
-    }));
-
-    return buildResponse(intentName, "Your refill request has been sent to the medical team.");
-  }
-
-  return { sessionState: { dialogAction: { type: 'Delegate' }, intent: { name: intentName, state: 'InProgress' } } };
+        sessionAttributes: sessionAttributes
+    };
 };
-
-// HELPERS
-async function getClinicProfile(tenantId: string) {
-  const res = await docClient.send(new QueryCommand({
-    TableName: process.env.CONNECT_DATA_TABLE_NAME,
-    IndexName: 'tenantId-index',
-    KeyConditionExpression: "tenantId = :tId",
-    FilterExpression: "sk = :profile",
-    ExpressionAttributeValues: { ":tId": tenantId, ":profile": "CLINIC_SETTINGS" }
-  }));
-  return res.Items?.[0];
-}
-
-async function getDoctorsForClinic(tenantId: string) {
-  const res = await docClient.send(new QueryCommand({
-    TableName: process.env.CONNECT_DATA_TABLE_NAME,
-    IndexName: 'tenantId', // Changed from 'tenantId-index' to 'tenantId'
-    KeyConditionExpression: "tenantId = :tId",
-    FilterExpression: "begins_with(pk, :prefix)",
-    ExpressionAttributeValues: { ":tId": tenantId, ":prefix": "AGENT#" }
-  }));
-  return res.Items || [];
-}
-
-function buildResponse(intentName: string, message: string): LexV2Result {
-  return { 
-    sessionState: { 
-      dialogAction: { type: 'Close' }, 
-      intent: { name: intentName, state: 'Fulfilled' } 
-    }, 
-    messages: [{ contentType: 'PlainText', content: message }] 
-  };
-}
