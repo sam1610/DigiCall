@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { mockData } from '@/lib/mock-data';
+import { mockData } from '../../lib/mock-data';
 import { useAppStore } from '@/stores/app-store';
 import { StatCard } from '@/components/StatCard';
 import { SentimentBadge } from '@/components/SentimentBadge';
@@ -40,10 +40,20 @@ import {
   Cell,
 } from 'recharts';
 
+// 1. AMPLIFY IMPORTS
+import { generateClient } from 'aws-amplify/data';
+import type { Schema } from '../../../amplify/data/resource';
+
+// 2. INITIALIZE CLIENT
+const client = generateClient<Schema>();
+
 export default function SupervisorOverview() {
   const navigate = useNavigate();
   const { alerts, setAlerts } = useAppStore();
   const [dateRange, setDateRange] = useState('14');
+
+  // 3. REAL CALLS STATE
+  const [realCalls, setRealCalls] = useState<any[]>([]);
 
   // Initialize alerts from mock data if empty
   useEffect(() => {
@@ -52,7 +62,38 @@ export default function SupervisorOverview() {
     }
   }, [alerts.length, setAlerts]);
 
-  const { calls, dailyMetrics, agents } = mockData;
+  // 4. FETCH REAL TRANSCRIPTS FROM DYNAMODB
+  useEffect(() => {
+    const sub = client.models.ChatTranscript.observeQuery().subscribe({
+      next: ({ items }) => {
+        // Map DynamoDB items into the shape the UI expects
+        const mappedCalls = items.map((item) => ({
+          id: item.contactId,
+          startedAt: item.initiationTimestamp,
+          durationSec: item.durationSeconds || 0,
+          realTranscript: item.fullTranscriptJson, 
+          
+          // Temporary fallbacks for charts until AI analysis is added
+          sentimentScore: 0.5, 
+          sentimentLabel: 'neutral',
+          topics: ['general-inquiry'],
+          agentName: 'DigiCall Bot',
+          customerName: 'Unknown Patient'
+        }));
+        
+        // Sort newest first
+        mappedCalls.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+        setRealCalls(mappedCalls);
+      },
+      error: (err) => console.error("Error fetching transcripts:", err)
+    });
+    
+    return () => sub.unsubscribe(); // Cleanup subscription
+  }, []);
+
+  // 5. USE REAL CALLS (While keeping mock metrics/agents for the charts)
+  const { dailyMetrics, agents } = mockData;
+  const calls = realCalls.length > 0 ? realCalls : []; // Only use real DynamoDB data!
   
   // Filter by date range
   const cutoffDate = new Date();
@@ -60,15 +101,21 @@ export default function SupervisorOverview() {
   const filteredCalls = calls.filter(c => new Date(c.startedAt) >= cutoffDate);
   const filteredMetrics = dailyMetrics.filter(m => new Date(m.date) >= cutoffDate);
 
-  // Calculate overview stats
-  const avgSentiment = filteredCalls.reduce((sum, c) => sum + c.sentimentScore, 0) / filteredCalls.length;
-  const negativePercent = (filteredCalls.filter(c => c.sentimentLabel === 'negative').length / filteredCalls.length) * 100;
+  // 6. SAFETY CHECKS (Prevent Division by Zero when table is empty)
+  const avgSentiment = filteredCalls.length > 0 
+    ? filteredCalls.reduce((sum, c) => sum + c.sentimentScore, 0) / filteredCalls.length 
+    : 0;
+    
+  const negativePercent = filteredCalls.length > 0 
+    ? (filteredCalls.filter(c => c.sentimentLabel === 'negative').length / filteredCalls.length) * 100 
+    : 0;
+    
   const openAlerts = alerts.filter(a => a.status === 'open').length;
 
   // Topic distribution
   const topicCounts: Record<string, number> = {};
   filteredCalls.forEach(call => {
-    call.topics.forEach(topic => {
+    call.topics.forEach((topic: string) => {
       topicCounts[topic] = (topicCounts[topic] || 0) + 1;
     });
   });

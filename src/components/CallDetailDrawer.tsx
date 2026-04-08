@@ -185,26 +185,30 @@ export function CallDetailDrawer({ call, open, onOpenChange }: CallDetailDrawerP
             )}
 
             {/* Transcript */}
-            {summary?.transcript && (
+           {/* REAL TRANSCRIPT FROM DYNAMODB */}
+            {call.realTranscript && (
               <div>
-                <h4 className="font-semibold mb-3">Transcript</h4>
+                <h4 className="font-semibold mb-3">Live Chat Transcript</h4>
                 <div className="space-y-3">
-                  {summary.transcript.map((turn, idx) => (
+                  {/* Cast the JSON to an array and map through the messages */}
+                  {(call.realTranscript as any[]).map((turn, idx) => (
                     <div
                       key={idx}
                       className={`p-3 rounded-lg ${
-                        turn.speaker === 'Agent'
+                        turn.role === 'SYSTEM'
                           ? 'bg-primary/10 ml-4'
                           : 'bg-muted mr-4'
                       }`}
                     >
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-medium">{turn.speaker}</span>
+                        <span className="text-xs font-medium">
+                          {turn.role === 'SYSTEM' ? 'DigiCall Agent' : 'Patient'}
+                        </span>
                         <span className="text-xs text-muted-foreground">
-                          {turn.timestamp}
+                          {new Date(turn.time).toLocaleTimeString()}
                         </span>
                       </div>
-                      <p className="text-sm">{turn.text}</p>
+                      <p className="text-sm">{turn.content}</p>
                     </div>
                   ))}
                 </div>
