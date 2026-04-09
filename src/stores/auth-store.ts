@@ -29,7 +29,8 @@ interface AuthState {
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
-      user: null,
+      // THE BYPASS: Set Ada as permanently logged in by default instead of null
+      user: MOCK_USERS[0], 
       signIn: (user) => set({ user }),
       signOut: () => set({ user: null }),
     }),

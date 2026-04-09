@@ -13,7 +13,7 @@ import SupervisorAlerts from './pages/supervisor/Alerts';
 import SupervisorSearch from './pages/supervisor/Search';
 import SupervisorBriefs from './pages/supervisor/Briefs';
 import SupervisorSettings from './pages/supervisor/Settings';
-import ProtectedRoute from './components/ProtectedRoute';
+import {ProtectedRoute} from './components/ProtectedRoute';
 import ChatTranscriptViewer from './components/ChatTranscriptViewer'; // <-- ADD THIS IMPORT
 
 import './App.css';

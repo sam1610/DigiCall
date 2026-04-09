@@ -3,10 +3,11 @@ import { useAuthStore, UserRole } from '@/stores/auth-store';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
-  allowedRole?: UserRole;
+  // Changed to plural array to fix the App.tsx TypeScript error
+  allowedRoles?: UserRole[]; 
 }
 
-export function ProtectedRoute({ children, allowedRole }: ProtectedRouteProps) {
+export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
   const { user } = useAuthStore();
   const location = useLocation();
 
@@ -16,11 +17,10 @@ export function ProtectedRoute({ children, allowedRole }: ProtectedRouteProps) {
   }
 
   // User logged in but accessing wrong role's route
-  if (allowedRole && user.role !== allowedRole) {
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
     const redirectPath = user.role === 'supervisor' ? '/supervisor' : '/agent';
     return <Navigate to={redirectPath} replace />;
   }
 
   return <>{children}</>;
 }
-
