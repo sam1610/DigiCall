@@ -1,6 +1,10 @@
-import { Authenticator } from '@aws-amplify/ui-react';
+import { useEffect } from 'react';
+import { Authenticator, useAuthenticator } from '@aws-amplify/ui-react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { ThemeProvider } from './components/theme-provider';
+import { fetchAuthSession } from 'aws-amplify/auth';
+import { useAuthStore } from './stores/auth-store';
+
 import AgentLayout from './pages/AgentLayout';
 import SupervisorLayout from './pages/SupervisorLayout';
 import Index from './pages/Index';
@@ -13,70 +17,103 @@ import SupervisorAlerts from './pages/supervisor/Alerts';
 import SupervisorSearch from './pages/supervisor/Search';
 import SupervisorBriefs from './pages/supervisor/Briefs';
 import SupervisorSettings from './pages/supervisor/Settings';
-import {ProtectedRoute} from './components/ProtectedRoute';
-import ChatTranscriptViewer from './components/ChatTranscriptViewer'; // <-- ADD THIS IMPORT
+import { ProtectedRoute } from './components/ProtectedRoute';
+import ChatTranscriptViewer from './components/ChatTranscriptViewer';
 
 import './App.css';
 import '@aws-amplify/ui-react/styles.css';
 
-// Using your exact JSON payload for local testing
-const sampleChatData = {
-  "Version":"2019-08-26",
-  "AWSAccountId":"770961405135",
-  "InstanceId":"0cb42924-3bcc-4f0b-a7d0-dbf5770fabfd",
-  "InitialContactId":"8194a906-ef39-4e6d-8ccc-a924ed53fc2a",
-  "ContactId":"8194a906-ef39-4e6d-8ccc-a924ed53fc2a",
-  "Participants":[{"ParticipantId":"61820ec4-3389-4446-9504-84bdedb27146"},{"ParticipantId":"4ff6d032-aa75-4ec8-80a2-5f9fccb7f945"}],
-  "Transcript":[
-    {"AbsoluteTime":"2026-04-07T08:45:33.965Z","ContentType":"application/vnd.amazonaws.connect.event.participant.joined","Id":"019d671e-538d-7be5-b375-334d2b36e7b3","Type":"EVENT","ParticipantId":"4ff6d032-aa75-4ec8-80a2-5f9fccb7f945","DisplayName":"Customer","ParticipantRole":"CUSTOMER"},
-    {"AbsoluteTime":"2026-04-07T08:45:41.351Z","Content":"hank you for calling the clinic. How can I help you today?","ContentType":"text/plain","Id":"019d671e-7067-7478-b245-8573f4c49f2c","Type":"MESSAGE","ParticipantId":"61820ec4-3389-4446-9504-84bdedb27146","DisplayName":"BOT","ParticipantRole":"SYSTEM"},
-    {"AbsoluteTime":"2026-04-07T10:37:14.009Z","ContentType":"application/vnd.amazonaws.connect.event.participant.left","Id":"019d6784-8f99-7f4b-8f13-b8dc35ed3a32","Type":"EVENT","ParticipantId":"4ff6d032-aa75-4ec8-80a2-5f9fccb7f945","DisplayName":"Customer","ParticipantRole":"CUSTOMER"},
-    {"AbsoluteTime":"2026-04-07T10:37:14.187Z","ContentType":"application/vnd.amazonaws.connect.event.chat.ended","Id":"019d6784-904b-737e-8157-668282383296","Type":"EVENT"}
-  ]
-} as any;
+// 1. EXTRACT THE INNER APP LOGIC
+// This component only renders *after* the user is successfully logged in via the Authenticator.
+function AuthenticatedApp() {
+  // useAuthenticator gives us access to the user and signOut function safely
+  const { user, signOut: amplifySignOut } = useAuthenticator((context) => [context.user]);
+  const { signIn, signOut } = useAuthStore();
 
+  // 2. THIS USEEFFECT IS NOW SAFELY AT THE TOP LEVEL OF A COMPONENT
+  useEffect(() => {
+    async function syncUserRole() {
+      if (user) {
+        try {
+          const session = await fetchAuthSession();
+          const groups = session.tokens?.accessToken?.payload['cognito:groups'] as string[] || [];
+          
+          // Determine role from Cognito groups, default to agent
+          const role = groups.includes('supervisor') ? 'supervisor' : 'agent';
+
+          signIn({
+            id: user.userId,
+            email: user.signInDetails?.loginId || '',
+            name: user.username || 'User',
+            role: role, 
+          });
+        } catch (error) {
+          console.error("Error fetching user session", error);
+        }
+      }
+    }
+    syncUserRole();
+  }, [user, signIn]);
+
+  const handleSignOut = () => {
+    amplifySignOut();
+    signOut(); // Clear local Zustand state
+  };
+
+  return (
+    <BrowserRouter
+      future={{
+        v7_startTransition: true,
+        v7_relativeSplatPath: true,
+      }}>
+      <Routes>
+        <Route path="/" element={<Index />} />
+        
+        <Route path="/transcript-test" element={
+          <div className="min-h-screen bg-slate-100 py-12 px-4 sm:px-6 lg:px-8">
+            {/* Provide a real path from your bucket here! */}
+            <ChatTranscriptViewer s3Key="connect/firsthub/ChatTranscripts/2026/04/07/8194a906-ef39-4e6d-8ccc-a924ed53fc2a_20260407T08:45_UTC.json" />
+          </div>
+        } />
+
+        <Route path="/agent" element={
+          <ProtectedRoute allowedRoles={['agent']}>
+            <AgentLayout onSignOut={handleSignOut} />
+          </ProtectedRoute>
+        }>
+          <Route index element={<AgentHome />} />
+          <Route path="notifications" element={<AgentNotifications />} />
+          <Route path="performance" element={<AgentPerformance />} />
+          <Route path="exemplars" element={<AgentExemplars />} />
+        </Route>
+
+        <Route path="/supervisor" element={
+          <ProtectedRoute allowedRoles={['supervisor']}>
+            <SupervisorLayout onSignOut={handleSignOut} />
+          </ProtectedRoute>
+        }>
+          <Route index element={<SupervisorOverview />} />
+          <Route path="alerts" element={<SupervisorAlerts />} />
+          <Route path="search" element={<SupervisorSearch />} />
+          <Route path="briefs" element={<SupervisorBriefs />} />
+          <Route path="settings" element={<SupervisorSettings />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+// 3. THE MAIN APP WRAPPER
 function App() {
   return (
     <ThemeProvider defaultTheme="light" storageKey="vite-ui-theme">
+      {/* The Authenticator handles the login UI. 
+        Once logged in, it renders the AuthenticatedApp children safely.
+      */}
       <Authenticator.Provider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Index />} />
-            
-            {/* ADDED TRANSCRIPT TEST ROUTE */}
-            <Route path="/transcript-test" element={
-              <div className="min-h-screen bg-slate-100 py-12 px-4 sm:px-6 lg:px-8">
-                <ChatTranscriptViewer mockData={sampleChatData} />
-                {/* To fetch a real file from S3 later, use: 
-                    <ChatTranscriptViewer s3Key="ChatTranscripts/2026/04/07/your-contact-id.json" /> 
-                */}
-              </div>
-            } />
-
-            <Route path="/agent" element={
-              <ProtectedRoute allowedRoles={['agent']}>
-                <AgentLayout />
-              </ProtectedRoute>
-            }>
-              <Route index element={<AgentHome />} />
-              <Route path="notifications" element={<AgentNotifications />} />
-              <Route path="performance" element={<AgentPerformance />} />
-              <Route path="exemplars" element={<AgentExemplars />} />
-            </Route>
-
-            <Route path="/supervisor" element={
-              <ProtectedRoute allowedRoles={['supervisor']}>
-                <SupervisorLayout />
-              </ProtectedRoute>
-            }>
-              <Route index element={<SupervisorOverview />} />
-              <Route path="alerts" element={<SupervisorAlerts />} />
-              <Route path="search" element={<SupervisorSearch />} />
-              <Route path="briefs" element={<SupervisorBriefs />} />
-              <Route path="settings" element={<SupervisorSettings />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
+        <Authenticator>
+          <AuthenticatedApp />
+        </Authenticator>
       </Authenticator.Provider>
     </ThemeProvider>
   );

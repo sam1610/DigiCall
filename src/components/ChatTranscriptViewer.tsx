@@ -1,10 +1,8 @@
 import React, { useState, useEffect } from 'react';
-// Import the Amplify storage method
 import { downloadData } from 'aws-amplify/storage';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { ScrollArea } from './ui/scroll-area';
 
-// TypeScript interfaces based on the Amazon Connect JSON structure
 export interface ChatEvent {
   AbsoluteTime: string;
   ContentType: string;
@@ -23,24 +21,28 @@ export interface ConnectTranscript {
 }
 
 interface ChatTranscriptViewerProps {
-  s3Key?: string; // The path to the file in S3 (e.g., "ChatTranscripts/2026/04/07/chat.json")
-  mockData?: ConnectTranscript; // Optional: For testing before S3 is fully connected
+  // Made this required! The component MUST receive an S3 path now.
+  s3Key: string; 
 }
 
-export default function ChatTranscriptViewer({ s3Key, mockData }: ChatTranscriptViewerProps) {
-  const [transcript, setTranscript] = useState<ConnectTranscript | null>(mockData || null);
-  const [loading, setLoading] = useState(!mockData);
+export default function ChatTranscriptViewer({ s3Key }: ChatTranscriptViewerProps) {
+  const [transcript, setTranscript] = useState<ConnectTranscript | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (mockData || !s3Key) return;
+    if (!s3Key) {
+      setError("No S3 key provided.");
+      setLoading(false);
+      return;
+    }
 
     const fetchTranscriptFromS3 = async () => {
       try {
         setLoading(true);
         // Securely fetch the JSON file from the connected S3 bucket
         const { body } = await downloadData({
-          path: s3Key, // In Amplify Gen 2, use 'path' or 'key' depending on config
+          path: s3Key, 
         }).result;
         
         const data = await body.json() as ConnectTranscript;
@@ -54,7 +56,7 @@ export default function ChatTranscriptViewer({ s3Key, mockData }: ChatTranscript
     };
 
     fetchTranscriptFromS3();
-  }, [s3Key, mockData]);
+  }, [s3Key]);
 
   if (loading) return <div className="p-8 text-center text-muted-foreground animate-pulse">Fetching encrypted chat log...</div>;
   if (error) return <div className="p-8 text-center text-red-500">Error: {error}</div>;
@@ -74,9 +76,8 @@ export default function ChatTranscriptViewer({ s3Key, mockData }: ChatTranscript
         <ScrollArea className="h-[600px] p-4 bg-slate-50/50">
           <div className="flex flex-col space-y-4">
             {transcript.Transcript.map((msg) => {
-              // Format system events (joined/left/ended)
               if (msg.Type === "EVENT") {
-                let action = msg.ContentType.split('.').pop(); // gets 'joined', 'left', 'ended'
+                let action = msg.ContentType.split('.').pop(); 
                 return (
                   <div key={msg.Id} className="flex justify-center my-2">
                     <span className="bg-slate-200 text-slate-600 text-[10px] px-3 py-1 rounded-full uppercase tracking-wider font-semibold">
@@ -86,7 +87,6 @@ export default function ChatTranscriptViewer({ s3Key, mockData }: ChatTranscript
                 );
               }
 
-              // Format actual messages
               const isCustomer = msg.ParticipantRole === "CUSTOMER";
               return (
                 <div key={msg.Id} className={`flex flex-col ${isCustomer ? 'items-end' : 'items-start'}`}>
