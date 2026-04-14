@@ -1,6 +1,15 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 
+/** * CRITICAL FIX: Explicitly tell TypeScript where 'process' comes from in ESM
+ */
+declare const process: {
+  env: {
+    CONNECT_DATA_TABLE_NAME: string;
+    [key: string]: string | undefined;
+  };
+};
+
 // Initialize DynamoDB Client
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -9,13 +18,13 @@ const TABLE_NAME = process.env.CONNECT_DATA_TABLE_NAME;
 export const handler = async (event: any) => {
     console.log("Received event:", JSON.stringify(event, null, 2));
 
-// =====================================================================
+    // =====================================================================
     // MODE 1: AMAZON CONNECT (Direct Invoke for the Agent Card)
     // =====================================================================
     if (event.Details && event.Details.Parameters) {
         console.log("Handling request from Amazon Connect...");
         const phoneNumber = event.Details.Parameters.phoneNumber;
-        
+
         // NEW: Check if the calling flow specifically requested JSON format
         const returnJson = event.Details.Parameters.returnJson === "true";
 
@@ -30,7 +39,7 @@ export const handler = async (event: any) => {
             }));
 
             let pastRecordsArray: { date: string, symptoms: string }[] = [];
-            
+
             const historyRes = await docClient.send(new QueryCommand({
                 TableName: TABLE_NAME,
                 KeyConditionExpression: "pk = :pk AND begins_with(sk, :sk)",
@@ -78,6 +87,7 @@ export const handler = async (event: any) => {
 
             if (!phoneNumber) throw new Error("Missing phoneNumber parameter.");
             console.log(`[Bedrock] Looking up patient: ${phoneNumber}`);
+            sessionAttributes['PatientPhoneNumber'] = phoneNumber;
 
             const dynamoResponse = await docClient.send(new GetCommand({
                 TableName: TABLE_NAME,
@@ -85,8 +95,8 @@ export const handler = async (event: any) => {
             }));
 
             if (dynamoResponse.Item) {
-                responseBody = { 
-                    status: "success", 
+                responseBody = {
+                    status: "success",
                     patientFound: true,
                     name: dynamoResponse.Item.name,
                     role: dynamoResponse.Item.role,
@@ -96,18 +106,18 @@ export const handler = async (event: any) => {
                 responseBody = { status: "success", patientFound: false, message: "No patient found." };
             }
 
-        // --- ROUTE 2: RECORD CHECKUP ---
+// --- ROUTE 2: RECORD CHECKUP ---
         } else if (apiPath === '/checkup' && event.httpMethod === 'POST') {
             const properties = event.requestBody?.content['application/json']?.properties || [];
             const symptoms = properties.find((p: any) => p.name === 'symptoms')?.value;
 
-            // DO NOT write to DynamoDB here!
-            // Just save it to Session Attributes so the Connect Flow can hand it to the View
-            sessionAttributes['PatientSymptoms'] = symptoms;
+            console.log(`[Bedrock] Successfully recorded symptoms: ${symptoms}`);
+            
+            // Fix the name to match what Amazon Connect expects
+            sessionAttributes['Symptoms'] = symptoms; 
 
-            responseBody = { status: "success", message: "Draft symptoms prepared for nurse validation." };
-
-        // --- ROUTE 3: ROUTE CALL ---
+            responseBody = { status: "success", message: "Symptoms recorded." };
+            // --- ROUTE 3: ROUTE CALL ---
         } else if (apiPath === '/route-call' && event.httpMethod === 'POST') {
             const properties = event.requestBody?.content['application/json']?.properties || [];
             const targetQueue = properties.find((p: any) => p.name === 'targetQueue')?.value;

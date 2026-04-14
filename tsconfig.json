@@ -4,30 +4,30 @@
     "useDefineForClassFields": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "module": "ESNext",
-    
-    /* Bundler mode */
+    "skipLibCheck": true,
+
+    /* Keep ONLY the bundler resolution for modern Vite/Amplify 
+    */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+
+    /* Ensure Node types are loaded globally so 'process' is recognized 
+    */
+    "types": ["node"],
     
-    /* React Setup */
     "jsx": "react-jsx",
-    
-    /* Aliases */
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
-    },
-
-    /* Strictness / Error Ignoring */
-    "skipLibCheck": true,
-    "allowJs": true,
-    "noImplicitAny": false,
-    "noUnusedParameters": false,
-    "noUnusedLocals": false,
-    "strictNullChecks": false
+    }
   },
-  "include": ["src"]
+  /* CRITICAL: Add "amplify" here so TypeScript checks your Lambda code! 
+  */
+  "include": [
+    "src", 
+    "amplify/**/*.ts"
+  ]
 }

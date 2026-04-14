@@ -3,6 +3,12 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
 
+declare const process: {
+  env: {
+    TRANSCRIPT_TABLE_NAME: string;    // ← correct name
+    [key: string]: string | undefined;
+  };
+};
 const s3 = new S3Client({});
 const docClient = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const TABLE_NAME = process.env.TRANSCRIPT_TABLE_NAME;
