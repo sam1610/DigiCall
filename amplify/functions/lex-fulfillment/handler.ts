@@ -78,7 +78,6 @@ export const handler = async (event: any) => {
     const apiPath = event.apiPath;
     let responseBody = {};
     const sessionAttributes: Record<string, string> = event.sessionAttributes || {};
-
     try {
         // --- ROUTE 1: GET PATIENT PROFILE ---
         if (apiPath === '/patient-profile' && event.httpMethod === 'POST') {
@@ -106,7 +105,36 @@ export const handler = async (event: any) => {
                 responseBody = { status: "success", patientFound: false, message: "No patient found." };
             }
 
-// --- ROUTE 2: RECORD CHECKUP ---
+        // --- NEW ROUTE: REGISTER PATIENT ---
+        } else if (apiPath === '/register-patient' && event.httpMethod === 'POST') {
+            const properties = event.requestBody?.content['application/json']?.properties || [];
+            const phoneNumber = properties.find((p: any) => p.name === 'phoneNumber')?.value;
+            const name = properties.find((p: any) => p.name === 'name')?.value || "Unknown";
+            const address = properties.find((p: any) => p.name === 'address')?.value || "Not Provided";
+
+            if (!phoneNumber) throw new Error("Missing phoneNumber parameter for registration.");
+            
+            const timestamp = new Date().toISOString();
+
+            await docClient.send(new PutCommand({
+                TableName: TABLE_NAME,
+                Item: {
+                    pk: `PATIENT#${phoneNumber}`,
+                    sk: `METADATA`,
+                    tenantId: "CLINIC_BH_01",
+                    role: "PATIENT",
+                    name: name,
+                    address: address,
+                    businessPhone: phoneNumber,
+                    status: "Active",
+                    createdAt: timestamp
+                }
+            }));
+
+            console.log(`[Bedrock] Successfully registered new patient: ${name} (${phoneNumber})`);
+            responseBody = { status: "success", message: "Patient registered successfully." };
+
+        // --- ROUTE 3: RECORD CHECKUP ---
         } else if (apiPath === '/checkup' && event.httpMethod === 'POST') {
             const properties = event.requestBody?.content['application/json']?.properties || [];
             const symptoms = properties.find((p: any) => p.name === 'symptoms')?.value;
@@ -117,7 +145,8 @@ export const handler = async (event: any) => {
             sessionAttributes['Symptoms'] = symptoms; 
 
             responseBody = { status: "success", message: "Symptoms recorded." };
-            // --- ROUTE 3: ROUTE CALL ---
+
+        // --- ROUTE 4: ROUTE CALL ---
         } else if (apiPath === '/route-call' && event.httpMethod === 'POST') {
             const properties = event.requestBody?.content['application/json']?.properties || [];
             const targetQueue = properties.find((p: any) => p.name === 'targetQueue')?.value;
@@ -136,6 +165,64 @@ export const handler = async (event: any) => {
         console.error("Error executing action:", error);
         responseBody = { status: "error", message: error.message || "Unknown error" };
     }
+
+//     try {
+//         // --- ROUTE 1: GET PATIENT PROFILE ---
+//         if (apiPath === '/patient-profile' && event.httpMethod === 'POST') {
+//             const properties = event.requestBody?.content['application/json']?.properties || [];
+//             const phoneNumber = properties.find((p: any) => p.name === 'phoneNumber')?.value;
+
+//             if (!phoneNumber) throw new Error("Missing phoneNumber parameter.");
+//             console.log(`[Bedrock] Looking up patient: ${phoneNumber}`);
+//             sessionAttributes['PatientPhoneNumber'] = phoneNumber;
+
+//             const dynamoResponse = await docClient.send(new GetCommand({
+//                 TableName: TABLE_NAME,
+//                 Key: { pk: `PATIENT#${phoneNumber}`, sk: 'METADATA' }
+//             }));
+
+//             if (dynamoResponse.Item) {
+//                 responseBody = {
+//                     status: "success",
+//                     patientFound: true,
+//                     name: dynamoResponse.Item.name,
+//                     role: dynamoResponse.Item.role,
+//                     clinicalNotes: dynamoResponse.Item.clinicalNotes || "No notes on file."
+//                 };
+//             } else {
+//                 responseBody = { status: "success", patientFound: false, message: "No patient found." };
+//             }
+
+// // --- ROUTE 2: RECORD CHECKUP ---
+//         } else if (apiPath === '/checkup' && event.httpMethod === 'POST') {
+//             const properties = event.requestBody?.content['application/json']?.properties || [];
+//             const symptoms = properties.find((p: any) => p.name === 'symptoms')?.value;
+
+//             console.log(`[Bedrock] Successfully recorded symptoms: ${symptoms}`);
+            
+//             // Fix the name to match what Amazon Connect expects
+//             sessionAttributes['Symptoms'] = symptoms; 
+
+//             responseBody = { status: "success", message: "Symptoms recorded." };
+//             // --- ROUTE 3: ROUTE CALL ---
+//         } else if (apiPath === '/route-call' && event.httpMethod === 'POST') {
+//             const properties = event.requestBody?.content['application/json']?.properties || [];
+//             const targetQueue = properties.find((p: any) => p.name === 'targetQueue')?.value;
+
+//             if (!targetQueue) throw new Error("Missing targetQueue parameter");
+
+//             responseBody = { status: "success", message: `Transfer initiated to ${targetQueue}.` };
+//             sessionAttributes['TargetQueue'] = targetQueue;
+//             sessionAttributes['x-amz-lex:bedrock-agent:end-session'] = "true";
+
+//         } else {
+//             throw new Error(`Unknown API path or method: ${event.httpMethod} ${apiPath}`);
+//         }
+
+//     } catch (error: any) {
+//         console.error("Error executing action:", error);
+//         responseBody = { status: "error", message: error.message || "Unknown error" };
+//     }
 
     return {
         messageVersion: "1.0",

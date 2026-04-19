@@ -1,0 +1,90 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "DigiCall Clinic Triage API",
+    "version": "1.0.0",
+    "description": "API for clinical triage, recording patient checkups, and routing calls."
+  },
+  "paths": {
+    "/patient-profile": {
+      "post": {
+        "summary": "Retrieve patient profile",
+        "description": "Gets patient metadata using their phone number.",
+        "operationId": "getPatientProfile",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["phoneNumber"],
+                "properties": {
+                  "phoneNumber": {
+                    "type": "string",
+                    "description": "The patient's phone number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful retrieval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/checkup": {
+      "post": {
+        "summary": "Record a clinical checkup",
+        "description": "Logs symptoms and vitals for a patient checkup.",
+        "operationId": "recordCheckup",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["phoneNumber", "symptoms"],
+                "properties": {
+                  "phoneNumber": {
+                    "type": "string",
+                    "description": "The patient's phone number"
+                  },
+                  "symptoms": {
+                    "type": "string",
+                    "description": "The reported symptoms"
+                  },
+                  "vitals": {
+                    "type": "string",
+                    "description": "Any reported vitals"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
