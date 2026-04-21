@@ -1,5 +1,6 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
 
 /** * CRITICAL FIX: Explicitly tell TypeScript where 'process' comes from in ESM
  */
@@ -10,10 +11,11 @@ declare const process: {
   };
 };
 
-// Initialize DynamoDB Client
+// Initialize DynamoDB Client & SNS Client
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 const TABLE_NAME = process.env.CONNECT_DATA_TABLE_NAME;
+const snsClient = new SNSClient({});
 
 export const handler = async (event: any) => {
     console.log("Received event:", JSON.stringify(event, null, 2));
@@ -25,7 +27,6 @@ export const handler = async (event: any) => {
         console.log("Handling request from Amazon Connect...");
         const phoneNumber = event.Details.Parameters.phoneNumber;
 
-        // NEW: Check if the calling flow specifically requested JSON format
         const returnJson = event.Details.Parameters.returnJson === "true";
 
         if (!phoneNumber) {
@@ -60,7 +61,6 @@ export const handler = async (event: any) => {
                     PatientName: dynamoResponse.Item.name || "Unknown",
                     ClinicalNotes: dynamoResponse.Item.clinicalNotes || "No notes on file.",
                     CustomerPhoneNumber: phoneNumber,
-                    // SMART ROUTING: Give an Array to the Screenpop View, but give a String to the Inbound flow!
                     PreviousRecords: returnJson ? pastRecordsArray : JSON.stringify(pastRecordsArray)
                 };
             } else {
@@ -76,16 +76,17 @@ export const handler = async (event: any) => {
     // MODE 2: AMAZON BEDROCK AGENT (Action Group)
     // =====================================================================
     const apiPath = event.apiPath;
-    let responseBody = {};
+    let responseBody: any = {};
     const sessionAttributes: Record<string, string> = event.sessionAttributes || {};
+    
     try {
-        // --- ROUTE 1: GET PATIENT PROFILE ---
-        if (apiPath === '/patient-profile' && event.httpMethod === 'POST') {
+        // --- ROUTE 1: REQUEST OTP & CHECK PATIENT ---
+        if (apiPath === '/request-otp' && event.httpMethod === 'POST') {
             const properties = event.requestBody?.content['application/json']?.properties || [];
             const phoneNumber = properties.find((p: any) => p.name === 'phoneNumber')?.value;
 
             if (!phoneNumber) throw new Error("Missing phoneNumber parameter.");
-            console.log(`[Bedrock] Looking up patient: ${phoneNumber}`);
+            console.log(`[Bedrock] Checking patient & Requesting OTP for: ${phoneNumber}`);
             sessionAttributes['PatientPhoneNumber'] = phoneNumber;
 
             const dynamoResponse = await docClient.send(new GetCommand({
@@ -93,48 +94,104 @@ export const handler = async (event: any) => {
                 Key: { pk: `PATIENT#${phoneNumber}`, sk: 'METADATA' }
             }));
 
+            // Generate a 4-digit OTP for EVERYONE (new or returning)
+            const otp = Math.floor(1000 + Math.random() * 9000).toString();
+
             if (dynamoResponse.Item) {
-                responseBody = {
-                    status: "success",
-                    patientFound: true,
-                    name: dynamoResponse.Item.name,
-                    role: dynamoResponse.Item.role,
-                    clinicalNotes: dynamoResponse.Item.clinicalNotes || "No notes on file."
-                };
+                // RETURN PATIENT: Update their existing profile with the new OTP
+                await docClient.send(new PutCommand({
+                    TableName: TABLE_NAME,
+                    Item: { ...dynamoResponse.Item, currentOtp: otp }
+                }));
+                responseBody = { status: "success", patientFound: true, message: "OTP sent to returning patient." };
             } else {
-                responseBody = { status: "success", patientFound: false, message: "No patient found." };
+                // NEW PATIENT: Create a temporary "Pending" profile just to hold the OTP
+                const timestamp = new Date().toISOString();
+                await docClient.send(new PutCommand({
+                    TableName: TABLE_NAME,
+                    Item: {
+                        pk: `PATIENT#${phoneNumber}`,
+                        sk: `METADATA`,
+                        tenantId: "CLINIC_BH_01",
+                        role: "PATIENT",
+                        name: "Pending Verification",
+                        businessPhone: phoneNumber,
+                        currentOtp: otp,
+                        status: "Pending",
+                        createdAt: timestamp
+                    }
+                }));
+                responseBody = { status: "success", patientFound: false, message: "OTP sent to new patient. Needs registration details." };
             }
 
-        // --- NEW ROUTE: REGISTER PATIENT ---
+            // Send the SMS to EVERYONE
+            try {
+                console.log(`DEVELOPER OVERRIDE: The OTP for ${phoneNumber} is ${otp}`);
+                await snsClient.send(new PublishCommand({
+                    Message: `Your DigiCall Clinic verification code is: ${otp}`,
+                    PhoneNumber: phoneNumber
+                }));
+                console.log(`Successfully sent SMS to ${phoneNumber}`);
+            } catch (snsError) {
+                console.error("SNS Error (Are you in the SMS Sandbox?):", snsError);
+            }
+
+        // --- ROUTE 2: VERIFY OTP ---
+        } else if (apiPath === '/verify-otp' && event.httpMethod === 'POST') {
+            const properties = event.requestBody?.content['application/json']?.properties || [];
+            const phoneNumber = properties.find((p: any) => p.name === 'phoneNumber')?.value;
+            const otp = properties.find((p: any) => p.name === 'otp')?.value;
+
+            const dynamoResponse = await docClient.send(new GetCommand({
+                TableName: TABLE_NAME,
+                Key: { pk: `PATIENT#${phoneNumber}`, sk: 'METADATA' }
+            }));
+
+            if (dynamoResponse.Item && dynamoResponse.Item.currentOtp === otp) {
+                // Clear the OTP so it can't be reused
+                await docClient.send(new PutCommand({
+                    TableName: TABLE_NAME,
+                    Item: { ...dynamoResponse.Item, currentOtp: null }
+                }));
+                responseBody = { status: "success", authenticated: true, name: dynamoResponse.Item.name, message: "OTP verified." };
+            } else {
+                responseBody = { status: "success", authenticated: false, message: "Invalid code." };
+            }
+
+        // --- ROUTE 3: REGISTER NEW PATIENT (NOW VERIFIES OTP) ---
         } else if (apiPath === '/register-patient' && event.httpMethod === 'POST') {
             const properties = event.requestBody?.content['application/json']?.properties || [];
             const phoneNumber = properties.find((p: any) => p.name === 'phoneNumber')?.value;
             const name = properties.find((p: any) => p.name === 'name')?.value || "Unknown";
             const address = properties.find((p: any) => p.name === 'address')?.value || "Not Provided";
+            const otp = properties.find((p: any) => p.name === 'otp')?.value; // <--- Grab the OTP
 
-            if (!phoneNumber) throw new Error("Missing phoneNumber parameter for registration.");
-            
-            const timestamp = new Date().toISOString();
+            if (!phoneNumber || !otp) throw new Error("Missing phoneNumber or OTP for registration.");
 
-            await docClient.send(new PutCommand({
+            const dynamoResponse = await docClient.send(new GetCommand({
                 TableName: TABLE_NAME,
-                Item: {
-                    pk: `PATIENT#${phoneNumber}`,
-                    sk: `METADATA`,
-                    tenantId: "CLINIC_BH_01",
-                    role: "PATIENT",
-                    name: name,
-                    address: address,
-                    businessPhone: phoneNumber,
-                    status: "Active",
-                    createdAt: timestamp
-                }
+                Key: { pk: `PATIENT#${phoneNumber}`, sk: 'METADATA' }
             }));
 
-            console.log(`[Bedrock] Successfully registered new patient: ${name} (${phoneNumber})`);
-            responseBody = { status: "success", message: "Patient registered successfully." };
+            // Verify the OTP attached to the temporary profile
+            if (dynamoResponse.Item && dynamoResponse.Item.currentOtp === otp) {
+                const timestamp = new Date().toISOString();
+                // Upgrade the profile to Active and clear the OTP
+                await docClient.send(new PutCommand({
+                    TableName: TABLE_NAME,
+                    Item: {
+                        pk: `PATIENT#${phoneNumber}`, sk: `METADATA`, tenantId: "CLINIC_BH_01",
+                        role: "PATIENT", name: name, address: address, businessPhone: phoneNumber, 
+                        status: "Active", currentOtp: null, createdAt: timestamp // Clear OTP, mark Active
+                    }
+                }));
+                console.log(`[Bedrock] Registered and Verified new patient: ${name}`);
+                responseBody = { status: "success", authenticated: true, message: "Patient verified and registered successfully." };
+            } else {
+                responseBody = { status: "success", authenticated: false, message: "Invalid verification code." };
+            }
 
-        // --- ROUTE 3: RECORD CHECKUP ---
+        // --- ROUTE 4: RECORD CHECKUP ---
         } else if (apiPath === '/checkup' && event.httpMethod === 'POST') {
             const properties = event.requestBody?.content['application/json']?.properties || [];
             const symptoms = properties.find((p: any) => p.name === 'symptoms')?.value;
@@ -146,7 +203,7 @@ export const handler = async (event: any) => {
 
             responseBody = { status: "success", message: "Symptoms recorded." };
 
-        // --- ROUTE 4: ROUTE CALL ---
+        // --- ROUTE 5: ROUTE CALL ---
         } else if (apiPath === '/route-call' && event.httpMethod === 'POST') {
             const properties = event.requestBody?.content['application/json']?.properties || [];
             const targetQueue = properties.find((p: any) => p.name === 'targetQueue')?.value;
@@ -165,64 +222,6 @@ export const handler = async (event: any) => {
         console.error("Error executing action:", error);
         responseBody = { status: "error", message: error.message || "Unknown error" };
     }
-
-//     try {
-//         // --- ROUTE 1: GET PATIENT PROFILE ---
-//         if (apiPath === '/patient-profile' && event.httpMethod === 'POST') {
-//             const properties = event.requestBody?.content['application/json']?.properties || [];
-//             const phoneNumber = properties.find((p: any) => p.name === 'phoneNumber')?.value;
-
-//             if (!phoneNumber) throw new Error("Missing phoneNumber parameter.");
-//             console.log(`[Bedrock] Looking up patient: ${phoneNumber}`);
-//             sessionAttributes['PatientPhoneNumber'] = phoneNumber;
-
-//             const dynamoResponse = await docClient.send(new GetCommand({
-//                 TableName: TABLE_NAME,
-//                 Key: { pk: `PATIENT#${phoneNumber}`, sk: 'METADATA' }
-//             }));
-
-//             if (dynamoResponse.Item) {
-//                 responseBody = {
-//                     status: "success",
-//                     patientFound: true,
-//                     name: dynamoResponse.Item.name,
-//                     role: dynamoResponse.Item.role,
-//                     clinicalNotes: dynamoResponse.Item.clinicalNotes || "No notes on file."
-//                 };
-//             } else {
-//                 responseBody = { status: "success", patientFound: false, message: "No patient found." };
-//             }
-
-// // --- ROUTE 2: RECORD CHECKUP ---
-//         } else if (apiPath === '/checkup' && event.httpMethod === 'POST') {
-//             const properties = event.requestBody?.content['application/json']?.properties || [];
-//             const symptoms = properties.find((p: any) => p.name === 'symptoms')?.value;
-
-//             console.log(`[Bedrock] Successfully recorded symptoms: ${symptoms}`);
-            
-//             // Fix the name to match what Amazon Connect expects
-//             sessionAttributes['Symptoms'] = symptoms; 
-
-//             responseBody = { status: "success", message: "Symptoms recorded." };
-//             // --- ROUTE 3: ROUTE CALL ---
-//         } else if (apiPath === '/route-call' && event.httpMethod === 'POST') {
-//             const properties = event.requestBody?.content['application/json']?.properties || [];
-//             const targetQueue = properties.find((p: any) => p.name === 'targetQueue')?.value;
-
-//             if (!targetQueue) throw new Error("Missing targetQueue parameter");
-
-//             responseBody = { status: "success", message: `Transfer initiated to ${targetQueue}.` };
-//             sessionAttributes['TargetQueue'] = targetQueue;
-//             sessionAttributes['x-amz-lex:bedrock-agent:end-session'] = "true";
-
-//         } else {
-//             throw new Error(`Unknown API path or method: ${event.httpMethod} ${apiPath}`);
-//         }
-
-//     } catch (error: any) {
-//         console.error("Error executing action:", error);
-//         responseBody = { status: "error", message: error.message || "Unknown error" };
-//     }
 
     return {
         messageVersion: "1.0",

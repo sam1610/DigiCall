@@ -9,6 +9,8 @@ const schema = a.schema({
       tenantId: a.string().required(),
       role: a.string().required(), 
       name: a.string(),
+      address: a.string(),            // <--- NEW: Added for patient registration
+      currentOtp: a.string(),         // <--- NEW: Added for Passwordless OTP auth
       status: a.string(),             
       skills: a.string().array(),     
       queueId: a.string(),            
