@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { Call, CallSummary } from '@/lib/mock-data';
-import { MockService } from '@/lib/mock-service';
+import { Call } from '@/lib/mock-data';
 import { useAppStore } from '@/stores/app-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { SentimentBadge } from './SentimentBadge';
@@ -23,11 +22,13 @@ import {
   AlertTriangle,
   MessageSquare,
   Send,
+  MapPin,
+  Stethoscope
 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 
 interface CallDetailDrawerProps {
-  call: Call | null;
+  call: Call | any; // allow backend schema
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -39,11 +40,11 @@ export function CallDetailDrawer({ call, open, onOpenChange }: CallDetailDrawerP
 
   if (!call) return null;
 
-  const summary = MockService.getSummary(call.id);
   const isExemplar = exemplarCallIds.includes(call.id);
   const notes = callNotes.filter((n) => n.callId === call.id);
 
   const formatDuration = (seconds: number) => {
+    if (!seconds) return '0:00';
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
@@ -68,7 +69,7 @@ export function CallDetailDrawer({ call, open, onOpenChange }: CallDetailDrawerP
       ruleLabel: 'Manual Review',
       severity: 'medium' as const,
       status: 'open' as const,
-      issue: `Manual alert for ${call.topics[0]} call`,
+      issue: `Manual alert for medical request`,
     };
     setAlerts([newAlert, ...alerts]);
     toast({
@@ -97,8 +98,8 @@ export function CallDetailDrawer({ call, open, onOpenChange }: CallDetailDrawerP
       <SheetContent className="w-full sm:max-w-2xl overflow-hidden flex flex-col">
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">
-            Call Details
-            <SentimentBadge sentiment={call.sentimentLabel} />
+            Patient Triage Details
+            {call.sentimentLabel && <SentimentBadge sentiment={call.sentimentLabel} />}
           </SheetTitle>
         </SheetHeader>
 
@@ -107,113 +108,50 @@ export function CallDetailDrawer({ call, open, onOpenChange }: CallDetailDrawerP
             {/* Call Info */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">Agent</p>
+                <p className="text-sm text-muted-foreground">Phone Number</p>
                 <p className="font-medium flex items-center gap-2">
-                  <User className="h-4 w-4" />
-                  {call.agentName}
-                </p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">Customer</p>
-                <p className="font-medium">{call.customerName}</p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">Duration</p>
-                <p className="font-medium flex items-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  {formatDuration(call.durationSec)}
+                  {call.pk ? call.pk.replace('PATIENT#', '') : call.phoneNumber || 'Unknown'}
                 </p>
               </div>
               <div className="space-y-1">
                 <p className="text-sm text-muted-foreground">Date</p>
                 <p className="font-medium">
-                  {new Date(call.startedAt).toLocaleDateString()}
+                  {new Date(call.createdAt || call.startedAt).toLocaleString()}
                 </p>
               </div>
               <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">Sentiment Score</p>
-                <p className="font-medium">{call.sentimentScore.toFixed(2)}</p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm text-muted-foreground">Resolution</p>
+                <p className="text-sm text-muted-foreground">Status</p>
                 <p className="font-medium flex items-center gap-2">
-                  {call.resolved ? (
-                    <>
-                      <CheckCircle className="h-4 w-4 text-success" />
-                      Resolved
-                    </>
-                  ) : (
-                    <>
-                      <XCircle className="h-4 w-4 text-destructive" />
-                      Unresolved
-                    </>
-                  )}
+                  <CheckCircle className="h-4 w-4 text-success" />
+                  {call.status || 'Verified'}
                 </p>
               </div>
             </div>
 
-            {/* Topics */}
-            <div>
-              <p className="text-sm text-muted-foreground mb-2">Topics</p>
-              <div className="flex flex-wrap gap-2">
-                {call.topics.map((topic) => (
-                  <Badge key={topic} variant="secondary">
-                    {topic.replace(/-/g, ' ')}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-
-            {/* Summary */}
-            {summary && (
-              <div className="p-4 bg-muted/50 rounded-lg">
-                <h4 className="font-semibold mb-2">AI Summary</h4>
-                <p className="text-sm text-muted-foreground">{summary.summaryText}</p>
-                {summary.keyPhrases.length > 0 && (
-                  <div className="mt-3">
-                    <p className="text-xs text-muted-foreground mb-1">Key Phrases</p>
-                    <div className="flex flex-wrap gap-1">
-                      {summary.keyPhrases.map((phrase) => (
-                        <Badge key={phrase} variant="outline" className="text-xs">
-                          {phrase}
-                        </Badge>
-                      ))}
-                    </div>
+            {/* REAL AI TRIAGE SUMMARY */}
+            <div className="p-4 bg-muted/50 rounded-lg border border-primary/20">
+              <h4 className="font-semibold mb-3 flex items-center gap-2">
+                <Stethoscope className="h-4 w-4 text-primary" />
+                Triage Nurse Summary
+              </h4>
+              
+              <div className="space-y-3">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wider font-semibold">Patient Symptoms</p>
+                  <p className="text-sm leading-relaxed">{call.symptoms || 'No symptoms recorded.'}</p>
+                </div>
+                
+                {call.address && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wider font-semibold">Address on File</p>
+                    <p className="text-sm flex items-center gap-2">
+                      <MapPin className="h-3 w-3" />
+                      {call.address}
+                    </p>
                   </div>
                 )}
               </div>
-            )}
-
-            {/* Transcript */}
-           {/* REAL TRANSCRIPT FROM DYNAMODB */}
-            {call.realTranscript && (
-              <div>
-                <h4 className="font-semibold mb-3">Live Chat Transcript</h4>
-                <div className="space-y-3">
-                  {/* Cast the JSON to an array and map through the messages */}
-                  {(call.realTranscript as any[]).map((turn, idx) => (
-                    <div
-                      key={idx}
-                      className={`p-3 rounded-lg ${
-                        turn.role === 'SYSTEM'
-                          ? 'bg-primary/10 ml-4'
-                          : 'bg-muted mr-4'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-medium">
-                          {turn.role === 'SYSTEM' ? 'DigiCall Agent' : 'Patient'}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(turn.time).toLocaleTimeString()}
-                        </span>
-                      </div>
-                      <p className="text-sm">{turn.content}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            </div>
 
             {/* Notes */}
             <div>
