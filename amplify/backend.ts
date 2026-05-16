@@ -1,53 +1,3 @@
-// import { defineBackend } from '@aws-amplify/backend';
-// import { auth } from './auth/resource';
-// import { data } from './data/resource';
-// import { lexFulfillment } from './functions/lex-fulfillment/resource';
-// import { PolicyStatement, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-
-// const backend = defineBackend({
-//   auth,
-//   data,
-//   lexFulfillment,
-// });
-
-// // 1. LAMBDA EXECUTION ROLE (DynamoDB, SNS, SES)
-// backend.lexFulfillment.resources.lambda.addToRolePolicy(
-//   new PolicyStatement({ actions: ['sns:Publish'], resources: ['*'] })
-// );
-
-// backend.lexFulfillment.resources.lambda.addToRolePolicy(
-//   new PolicyStatement({ actions: ['ses:SendEmail', 'ses:SendRawEmail'], resources: ['*'] })
-// );
-
-// const connectDataTable = backend.data.resources.tables['ConnectData'];
-// backend.lexFulfillment.resources.lambda.addToRolePolicy(
-//   new PolicyStatement({
-//     actions: ['dynamodb:PutItem', 'dynamodb:GetItem', 'dynamodb:UpdateItem', 'dynamodb:Query'],
-//     resources: [connectDataTable.tableArn, `${connectDataTable.tableArn}/index/*`]
-//   })
-// );
-
-// backend.lexFulfillment.addEnvironment('CONNECT_DATA_TABLE_NAME', connectDataTable.tableName);
-
-// // 2. LAMBDA RESOURCE POLICY (Allow Bedrock to trigger it)
-// backend.lexFulfillment.resources.lambda.addPermission('AllowBedrockInvoke', {
-//   principal: new ServicePrincipal('bedrock.amazonaws.com'),
-//   action: 'lambda:InvokeFunction'
-// });
-// // 3. AMAZON CONNECT CUSTOMER PROFILES PERMISSIONS (NEW)
-// backend.lexFulfillment.resources.lambda.addToRolePolicy(
-//   new PolicyStatement({ 
-//     actions: [
-//       'profile:SearchProfiles', 
-//       'profile:CreateProfile'
-//     ], 
-//     resources: ['*'] 
-//   })
-// );
-
-// // Pass the Domain Name to the Lambda
-// backend.lexFulfillment.addEnvironment('CONNECT_DOMAIN_NAME', 'amazon-connect-firsthub');
-
 import { defineBackend } from '@aws-amplify/backend';
 import { auth } from './auth/resource';
 import { data } from './data/resource';
@@ -67,6 +17,8 @@ const backend = defineBackend({
 // ====================================================================
 // 1. LEX FULFILLMENT PERMISSIONS (Existing)
 // ====================================================================
+
+// SNS (kept for any future use, can be removed if fully on Pinpoint)
 backend.lexFulfillment.resources.lambda.addToRolePolicy(
   new PolicyStatement({ actions: ['sns:Publish'], resources: ['*'] })
 );
@@ -75,6 +27,7 @@ backend.lexFulfillment.resources.lambda.addToRolePolicy(
   new PolicyStatement({ actions: ['ses:SendEmail', 'ses:SendRawEmail'], resources: ['*'] })
 );
 
+// DynamoDB
 const connectDataTable = backend.data.resources.tables['ConnectData'];
 backend.lexFulfillment.resources.lambda.addToRolePolicy(
   new PolicyStatement({
@@ -82,27 +35,40 @@ backend.lexFulfillment.resources.lambda.addToRolePolicy(
     resources: [connectDataTable.tableArn, `${connectDataTable.tableArn}/index/*`]
   })
 );
-
 backend.lexFulfillment.addEnvironment('CONNECT_DATA_TABLE_NAME', connectDataTable.tableName);
 
-// LAMBDA RESOURCE POLICY (Allow Bedrock to trigger it)
+// Amazon Pinpoint — SendOTPMessage and VerifyOTPMessage
+// Replace the two placeholder values below with your real Pinpoint App ID
+// and origination number (or Sender ID) from the Pinpoint console.
+const PINPOINT_APP_ID = 'YOUR_PINPOINT_APP_ID';           // e.g. "a1b2c3d4e5f6..."
+const PINPOINT_ORIGINATION_NUMBER = 'YOUR_ORIGINATION_NUMBER'; // e.g. "+12025551234" or "DigiCall"
+
+backend.lexFulfillment.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: [
+      'mobiletargeting:SendOTPMessage',
+      'mobiletargeting:VerifyOTPMessage',
+    ],
+    resources: [`arn:aws:mobiletargeting:us-east-1:*:apps/${PINPOINT_APP_ID}*`],
+  })
+);
+backend.lexFulfillment.addEnvironment('PINPOINT_APP_ID', PINPOINT_APP_ID);
+backend.lexFulfillment.addEnvironment('PINPOINT_ORIGINATION_NUMBER', PINPOINT_ORIGINATION_NUMBER);
+
+// Allow Bedrock to invoke the Lambda
 backend.lexFulfillment.resources.lambda.addPermission('AllowBedrockInvoke', {
   principal: new ServicePrincipal('bedrock.amazonaws.com'),
   action: 'lambda:InvokeFunction'
 });
 
-// AMAZON CONNECT CUSTOMER PROFILES PERMISSIONS
+// Amazon Connect Customer Profiles
 backend.lexFulfillment.resources.lambda.addToRolePolicy(
   new PolicyStatement({ 
-    actions: [
-      'profile:SearchProfiles', 
-      'profile:CreateProfile'
-    ], 
+    actions: ['profile:SearchProfiles', 'profile:CreateProfile'], 
     resources: ['*'] 
   })
 );
 
-// Pass the Domain Name to the Lambda
 backend.lexFulfillment.addEnvironment('CONNECT_DOMAIN_NAME', 'amazon-connect-firsthub');
 
 

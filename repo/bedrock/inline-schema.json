@@ -2,15 +2,15 @@
   "openapi": "3.0.0",
   "info": {
     "title": "DigiCall Clinic Triage API",
-    "version": "1.0.0",
-    "description": "API for clinical triage, recording patient checkups, and routing calls."
+    "version": "2.0.0",
+    "description": "API for clinical triage: OTP auth, patient registration, checkup recording, and call routing."
   },
   "paths": {
-    "/patient-profile": {
+    "/request-otp": {
       "post": {
-        "summary": "Retrieve patient profile",
-        "description": "Gets patient metadata using their phone number.",
-        "operationId": "getPatientProfile",
+        "summary": "Request OTP and check if patient exists",
+        "description": "Checks if the patient exists. Sends a 6-digit OTP via Amazon Pinpoint SMS — no code is stored in the database. Returns patientFound and a referenceId that must be passed to /verify-otp.",
+        "operationId": "requestOtp",
         "requestBody": {
           "required": true,
           "content": {
@@ -21,7 +21,7 @@
                 "properties": {
                   "phoneNumber": {
                     "type": "string",
-                    "description": "The patient's phone number"
+                    "description": "The patient's full phone number in E.164 format, e.g. +97333787388"
                   }
                 }
               }
@@ -30,11 +30,116 @@
         },
         "responses": {
           "200": {
-            "description": "Successful retrieval",
+            "description": "OTP sent successfully",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "patientFound": { "type": "boolean" },
+                    "referenceId": { "type": "string", "description": "Pass this to /verify-otp" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/verify-otp": {
+      "post": {
+        "summary": "Verify the OTP provided by the patient",
+        "description": "Validates the 6-digit code via Amazon Pinpoint. Returns authenticated=true and the patient name on success. The referenceId must match the one returned by /request-otp.",
+        "operationId": "verifyOtp",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["phoneNumber", "otp"],
+                "properties": {
+                  "phoneNumber": {
+                    "type": "string",
+                    "description": "The patient's phone number"
+                  },
+                  "otp": {
+                    "type": "string",
+                    "description": "The 6-digit verification code the patient received via SMS"
+                  },
+                  "referenceId": {
+                    "type": "string",
+                    "description": "The referenceId returned by /request-otp. If omitted, derived from the phone number."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "authenticated": { "type": "boolean" },
+                    "name": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/register-patient": {
+      "post": {
+        "summary": "Register a new patient",
+        "description": "Creates a new patient profile. Only call this after /verify-otp returns authenticated=true for a new patient (patientFound=false). No OTP needed here — verification already happened.",
+        "operationId": "registerPatient",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["phoneNumber", "name"],
+                "properties": {
+                  "phoneNumber": {
+                    "type": "string",
+                    "description": "The patient's phone number"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "The patient's full name"
+                  },
+                  "address": {
+                    "type": "string",
+                    "description": "The patient's physical address (optional)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Registration result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "authenticated": { "type": "boolean" },
+                    "message": { "type": "string" }
+                  }
                 }
               }
             }
@@ -44,8 +149,8 @@
     },
     "/checkup": {
       "post": {
-        "summary": "Record a clinical checkup",
-        "description": "Logs symptoms and vitals for a patient checkup.",
+        "summary": "Record patient symptoms for a clinical checkup",
+        "description": "Saves the authenticated patient's symptoms and vitals to DynamoDB for the nurse agent to review.",
         "operationId": "recordCheckup",
         "requestBody": {
           "required": true,
@@ -61,11 +166,11 @@
                   },
                   "symptoms": {
                     "type": "string",
-                    "description": "The reported symptoms"
+                    "description": "The symptoms reported by the patient"
                   },
                   "vitals": {
                     "type": "string",
-                    "description": "Any reported vitals"
+                    "description": "Any vitals reported by the patient (optional)"
                   }
                 }
               }
@@ -74,11 +179,55 @@
         },
         "responses": {
           "200": {
-            "description": "Successfully recorded",
+            "description": "Checkup recorded",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/route-call": {
+      "post": {
+        "summary": "Route the patient to a specific agent queue",
+        "description": "Signals Amazon Connect to transfer the chat to the appropriate queue. Call this after symptoms are recorded. Valid queues: Nursing_Meds, Scheduling_Desk, Crisis_Team.",
+        "operationId": "routeCall",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["targetQueue"],
+                "properties": {
+                  "targetQueue": {
+                    "type": "string",
+                    "description": "The queue to route to. Use: Nursing_Meds for prescriptions/medications, Scheduling_Desk for appointments, Crisis_Team for emergencies."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Routing initiated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
                 }
               }
             }

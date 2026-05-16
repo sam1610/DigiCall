@@ -53,7 +53,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 // 3. Execute the Tools
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request: { params: { name: string; arguments?: Record<string, unknown> } }) => {
   const { name, arguments: args } = request.params;
 
   try {

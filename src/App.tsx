@@ -106,7 +106,7 @@ function AuthenticatedApp() {
 // 3. THE MAIN APP WRAPPER
 function App() {
   return (
-    <ThemeProvider defaultTheme="light" storageKey="vite-ui-theme">
+    <ThemeProvider defaultTheme="light" storageKey="vite-ui-theme" attribute="class" enableSystem={false}>
       {/* The Authenticator handles the login UI. 
         Once logged in, it renders the AuthenticatedApp children safely.
       */}
