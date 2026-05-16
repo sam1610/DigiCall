@@ -10,7 +10,7 @@ declare const process: {
   env: {
     CONNECT_DATA_TABLE_NAME: string;
     PINPOINT_APP_ID: string;
-    PINPOINT_ORIGINATION_NUMBER: string; // e.g. +1XXXXXXXXXX or your Sender ID
+    PINPOINT_ORIGINATION_NUMBER: string; 
     [key: string]: string | undefined;
   };
 };
